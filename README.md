@@ -52,6 +52,7 @@ pixi run cli --version-group brilliant-diamond-shining-pearl-regional  # switch 
 pixi run cli --allow-legendaries                             # include legendaries
 pixi run cli --lock charizard                                # force Charizard on team
 pixi run cli --lock-move charizard flamethrower              # force a move on a locked Pokemon
+pixi run cli --exclude-move charizard fire-blast             # forbid a move on a locked Pokemon
 pixi run cli --must-have earthquake                          # require Earthquake on someone
 pixi run cli --max-overlap 2                                 # allow 2 Pokemon sharing a type
 pixi run cli --min-redundancy 1                              # relax SE redundancy to 1
@@ -91,6 +92,7 @@ See `OPTIMISATION.md` for the full mathematical formulation.
 
 - **Lock a Pokemon** onto the team (`--lock`)
 - **Lock specific moves** on a locked Pokemon (`--lock-move`)
+- **Exclude specific moves** from a locked Pokemon (`--exclude-move`)
 - **Require a move** (e.g. Earthquake) without specifying who learns it (`--must-have`)
 - **Require a Pokemon type** (e.g. Water) on the team (`--must-have-type`)
 - **Ban legendaries** (default) or allow them (`--allow-legendaries`)
