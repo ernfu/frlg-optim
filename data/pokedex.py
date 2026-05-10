@@ -282,7 +282,9 @@ def _merge_pre_evolution_moves(
             if ancestor_move["name"] in own_move_names:
                 continue
             inherited = dict(ancestor_move)
-            inherited["learn_methods"] = ["pre-evolution"]
+            inherited_methods = set(ancestor_move.get("learn_methods", []))
+            inherited_methods.add("pre-evolution")
+            inherited["learn_methods"] = sorted(inherited_methods)
             inherited["tm_only"] = False
             p["moves"].append(inherited)
             own_move_names.add(inherited["name"])
@@ -309,14 +311,25 @@ def _build_move_record(
     raw_stat_changes = md.pop("stat_changes", [])
     priority = md.pop("priority", 0) or 0
 
-    md["recoil_pct"] = abs(drain) / 100 if drain < 0 else 0
+    md["recoil_mult"] = 1 - abs(drain) / 100 if drain < 0 else 1.0
     md["multi_hit"] = (min_hits + max_hits) / 2 if min_hits and max_hits else 1.0
     md["is_low_priority"] = priority < 0
     md["is_multi_turn"] = "recharge" in effect or "charges for one turn" in effect
     md["is_lock_in"] = "forced to attack" in effect
     md["is_self_ko"] = "User faints" in effect
     md["is_delayed_attack"] = "turns later" in short_effect.lower()
-    md["is_conditional"] = "can only be used" in effect.lower()
+    effect_lower = effect.lower()
+    short_effect_lower = short_effect.lower()
+    conditional_markers = (
+        "can only be used",
+        "fails if not used on",
+        "only works on",
+        "fails unless target is",
+    )
+    md["is_conditional"] = any(
+        marker in effect_lower or marker in short_effect_lower
+        for marker in conditional_markers
+    )
 
     negative_changes = [
         (stat, change) for stat, change in raw_stat_changes if change < 0
