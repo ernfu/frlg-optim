@@ -27,8 +27,10 @@ from data.pokedex import (
 )
 from optimiser.main import (
     DATA_PATH,
+    _locked_move_conflicts,
     dataset_generation,
     dataset_unlimited_tms,
+    filter_moves_by_learn_method,
     load_dataset,
     load_pokemon,
 )
@@ -114,23 +116,32 @@ def _get_pool_and_scores(
     acc_exponent: float,
     speed_bonus: float = 0.25,
     no_4x_weakness: bool = False,
+    exclude_egg_moves: bool = False,
+    locked_names: tuple[str, ...] | None = None,
     protected_moves_by_pokemon: dict[str, tuple[str, ...]] | None = None,
+    excluded_moves_by_pokemon: dict[str, tuple[str, ...]] | None = None,
 ):
     context = _get_dataset_context(version_group)
     generation = context["generation"]
+    locked_names = set(locked_names or ())
     protected_moves_by_pokemon = protected_moves_by_pokemon or {}
+    excluded_moves_by_pokemon = excluded_moves_by_pokemon or {}
     key = (
         version_group,
         no_legendaries,
         acc_exponent,
         speed_bonus,
         no_4x_weakness,
+        exclude_egg_moves,
+        tuple(sorted(locked_names)),
         tuple(
             sorted((name, moves) for name, moves in protected_moves_by_pokemon.items())
         ),
+        tuple(
+            sorted((name, moves) for name, moves in excluded_moves_by_pokemon.items())
+        ),
     )
     if key not in _score_cache:
-        locked_names = set(protected_moves_by_pokemon) if protected_moves_by_pokemon else set()
         pool = (
             [p for p in context["all_pokemon"] if not p["is_legendary"] or p["name"] in locked_names]
             if no_legendaries
@@ -143,10 +154,15 @@ def _get_pool_and_scores(
                 if not has_4x_weakness(p["types"], generation=generation)
                 or p["name"] in locked_names
             ]
+        if exclude_egg_moves:
+            pool = filter_moves_by_learn_method(pool, {"egg"})
         pool = filter_dominated_moves(
             pool,
             protected_moves_by_pokemon={
                 name: set(moves) for name, moves in protected_moves_by_pokemon.items()
+            },
+            excluded_moves_by_pokemon={
+                name: set(moves) for name, moves in excluded_moves_by_pokemon.items()
             },
         )
         scores = compute_scores(
@@ -184,10 +200,13 @@ def api_pokemon():
 @app.route("/api/moves/<pokemon>")
 def api_moves(pokemon):
     version_group = request.args.get("version_group", DEFAULT_VERSION_GROUP)
+    exclude_egg_moves = request.args.get("exclude_egg_moves") == "1"
     context = _get_dataset_context(version_group)
     poke = context["poke_by_name"].get(pokemon.lower())
     if not poke:
         return jsonify({"error": f"Pokemon '{pokemon}' not found"}), 404
+    if exclude_egg_moves:
+        poke = filter_moves_by_learn_method([poke], {"egg"})[0]
     moves, seen = [], set()
     for m in poke["moves"]:
         if m["power"] and m["power"] > 0 and m["name"] not in seen:
@@ -199,8 +218,20 @@ def api_moves(pokemon):
 @app.route("/api/all-moves")
 def api_all_moves():
     version_group = request.args.get("version_group", DEFAULT_VERSION_GROUP)
+    exclude_egg_moves = request.args.get("exclude_egg_moves") == "1"
     context = _get_dataset_context(version_group)
-    return jsonify(context["all_moves_sorted"])
+    if not exclude_egg_moves:
+        return jsonify(context["all_moves_sorted"])
+    filtered_pool = filter_moves_by_learn_method(context["all_pokemon"], {"egg"})
+    move_names = sorted(
+        {
+            move["name"]
+            for pokemon in filtered_pool
+            for move in pokemon["moves"]
+            if move.get("power") and move["power"] > 0
+        }
+    )
+    return jsonify(move_names)
 
 
 def _sse(event, data):
@@ -226,14 +257,35 @@ def optimize_stream():
     speed_bonus = float(data.get("speed_bonus", 0.25))
     allow_legendaries = bool(data.get("allow_legendaries", False))
     no_4x_weakness = bool(data.get("no_4x_weakness", False))
+    exclude_egg_moves = bool(data.get("exclude_egg_moves", False))
     must_include_starter = bool(data.get("must_include_starter", False))
 
     locked_pokemon: dict[str, list[str]] = {}
     for name in data.get("locked_pokemon", []):
         locked_pokemon.setdefault(name.lower(), [])
+    locked_moves_by_pokemon: dict[str, list[str]] = {}
     for pair in data.get("locked_moves", []):
-        locked_pokemon.setdefault(pair["pokemon"].lower(), []).append(
+        locked_moves_by_pokemon.setdefault(pair["pokemon"].lower(), []).append(
             pair["move"].lower()
+        )
+    excluded_moves_by_pokemon: dict[str, list[str]] = {}
+    for pair in data.get("excluded_moves", []):
+        excluded_moves_by_pokemon.setdefault(pair["pokemon"].lower(), []).append(
+            pair["move"].lower()
+        )
+
+    conflicts = _locked_move_conflicts(
+        locked_moves_by_pokemon, excluded_moves_by_pokemon
+    )
+    if conflicts:
+        return (
+            jsonify(
+                {
+                    "error": "Conflicting locked/excluded move pairs: "
+                    + ", ".join(conflicts)
+                }
+            ),
+            400,
         )
 
     params = Params(
@@ -244,6 +296,8 @@ def optimize_stream():
         role_threshold_pct=role_threshold_pct,
         no_legendaries=not allow_legendaries,
         locked_pokemon=locked_pokemon,
+        locked_moves_by_pokemon=locked_moves_by_pokemon,
+        excluded_moves_by_pokemon=excluded_moves_by_pokemon,
         must_have_moves=[m.lower() for m in data.get("must_have_moves", [])],
         must_have_types=[t.lower() for t in data.get("must_have_types", [])],
         must_include_any_of_pokemon=(
@@ -262,8 +316,15 @@ def optimize_stream():
         acc_exponent,
         speed_bonus,
         no_4x_weakness,
+        exclude_egg_moves,
+        locked_names=tuple(sorted(locked_pokemon)),
         protected_moves_by_pokemon={
-            name: tuple(sorted(moves)) for name, moves in locked_pokemon.items()
+            name: tuple(sorted(moves))
+            for name, moves in locked_moves_by_pokemon.items()
+        },
+        excluded_moves_by_pokemon={
+            name: tuple(sorted(moves))
+            for name, moves in excluded_moves_by_pokemon.items()
         },
     )
 
