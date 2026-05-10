@@ -51,6 +51,42 @@ def dataset_unlimited_tms(data: dict) -> set[str]:
     return set(data.get("unlimited_tms", []))
 
 
+def _locked_move_conflicts(
+    locked_moves_by_pokemon: dict[str, list[str]],
+    excluded_moves_by_pokemon: dict[str, list[str]],
+) -> list[str]:
+    conflicts = []
+    for name, locked_moves in locked_moves_by_pokemon.items():
+        excluded = set(excluded_moves_by_pokemon.get(name, []))
+        for move in locked_moves:
+            if move in excluded:
+                conflicts.append(f"{name}:{move}")
+    return sorted(conflicts)
+
+
+def filter_moves_by_learn_method(
+    pokemon_pool: list[dict], excluded_methods: set[str] | None = None
+) -> list[dict]:
+    """Return a copy of the pool with moves using excluded learn methods removed."""
+    excluded_methods = excluded_methods or set()
+    if not excluded_methods:
+        return pokemon_pool
+
+    filtered_pool = []
+    for pokemon in pokemon_pool:
+        filtered_pool.append(
+            {
+                **pokemon,
+                "moves": [
+                    move
+                    for move in pokemon.get("moves", [])
+                    if not excluded_methods.intersection(move.get("learn_methods", []))
+                ],
+            }
+        )
+    return filtered_pool
+
+
 def load_pokemon(
     path_or_data: Path | dict,
     no_legendaries: bool,
@@ -277,6 +313,14 @@ def main():
         help="Lock a move on a locked Pokémon (repeatable)",
     )
     parser.add_argument(
+        "--exclude-move",
+        action="append",
+        nargs=2,
+        default=[],
+        metavar=("POKEMON", "MOVE"),
+        help="Exclude a move from a locked Pokémon (repeatable)",
+    )
+    parser.add_argument(
         "--must-have",
         action="append",
         default=[],
@@ -332,8 +376,20 @@ def main():
     locked_pokemon: dict[str, list[str]] = {}
     for name in args.lock:
         locked_pokemon.setdefault(name.lower(), [])
+    locked_moves_by_pokemon: dict[str, list[str]] = {}
     for name, move in args.lock_move:
-        locked_pokemon.setdefault(name.lower(), []).append(move.lower())
+        locked_moves_by_pokemon.setdefault(name.lower(), []).append(move.lower())
+    excluded_moves_by_pokemon: dict[str, list[str]] = {}
+    for name, move in args.exclude_move:
+        excluded_moves_by_pokemon.setdefault(name.lower(), []).append(move.lower())
+
+    conflicts = _locked_move_conflicts(
+        locked_moves_by_pokemon, excluded_moves_by_pokemon
+    )
+    if conflicts:
+        raise SystemExit(
+            "Conflicting locked/excluded move pairs: " + ", ".join(conflicts)
+        )
 
     params = Params(
         max_overlap=args.max_overlap,
@@ -343,6 +399,8 @@ def main():
         role_threshold_pct=args.role_threshold_pct,
         no_legendaries=no_legendaries,
         locked_pokemon=locked_pokemon,
+        locked_moves_by_pokemon=locked_moves_by_pokemon,
+        excluded_moves_by_pokemon=excluded_moves_by_pokemon,
         must_have_moves=[m.lower() for m in args.must_have],
         must_have_types=[t.lower() for t in args.must_have_type],
         unlimited_tms=dataset_unlimited_tms(dataset),
@@ -365,7 +423,10 @@ def main():
     pool = filter_dominated_moves(
         pool,
         protected_moves_by_pokemon={
-            name: set(moves) for name, moves in params.locked_pokemon.items()
+            name: set(moves) for name, moves in params.locked_moves_by_pokemon.items()
+        },
+        excluded_moves_by_pokemon={
+            name: set(moves) for name, moves in params.excluded_moves_by_pokemon.items()
         },
     )
     print("Pre-computing scores...")
