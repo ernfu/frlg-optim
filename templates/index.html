@@ -382,6 +382,11 @@
             </div>
 
             <div class="checkbox-field">
+                <input type="checkbox" id="exclude-egg-moves">
+                <label for="exclude-egg-moves">Exclude Egg Moves</label>
+            </div>
+
+            <div class="checkbox-field">
                 <input type="checkbox" id="must-include-starter">
                 <label for="must-include-starter">Must Include Only One Starter</label>
             </div>
@@ -399,14 +404,25 @@
             </div>
 
             <div class="field">
-                <label>Lock Moves (on locked Pokemon)</label>
+                <label>Lock Moves</label>
                 <div class="add-row">
                     <select id="lock-move-poke"><option value="">Pokemon&hellip;</option></select>
                     <select id="lock-move-move"><option value="">Move&hellip;</option></select>
                     <button class="btn btn-sm btn-add" id="add-lock-move-btn">Add</button>
                 </div>
-                <div class="hint">Use this only after locking a Pokémon. For team-wide move requirements, use Must-Have Moves below.</div>
+                <div class="hint">If that Pokémon is selected, it must carry the move. This does not force the Pokémon onto the team.</div>
                 <div class="tag-list" id="locked-moves-tags"></div>
+            </div>
+
+            <div class="field">
+                <label>Exclude Moves</label>
+                <div class="add-row">
+                    <select id="exclude-move-poke"><option value="">Pokemon&hellip;</option></select>
+                    <select id="exclude-move-move"><option value="">Move&hellip;</option></select>
+                    <button class="btn btn-sm btn-add" id="add-exclude-move-btn">Add</button>
+                </div>
+                <div class="hint">If that Pokémon is selected, it cannot carry the move. This also does not force the Pokémon onto the team.</div>
+                <div class="tag-list" id="excluded-moves-tags"></div>
             </div>
 
             <div class="field">
@@ -511,6 +527,7 @@ let datasetList = [];
 let datasetsByGame = {};
 let lockedPokemon = [];
 let lockedMoves = [];
+let excludedMoves = [];
 let mustHaveMoves = [];
 let mustHaveTypes = [];
 let excludedPokemon = [];
@@ -544,8 +561,8 @@ const DEFAULTS = {
     maxOverlap: 2, minRedundancy: 1, maxSameTypeMoves: 4, minRoleTypes: 1,
     roleThresholdPct: 80, accExponent: 2.0,
     speedBonus: 25,
-    allowLegendaries: false, no4xWeakness: false, mustIncludeStarter: false,
-    lockedPokemon: [], lockedMoves: [], mustHaveMoves: [],
+    allowLegendaries: false, no4xWeakness: false, excludeEggMoves: false, mustIncludeStarter: false,
+    lockedPokemon: [], lockedMoves: [], excludedMoves: [], mustHaveMoves: [],
     mustHaveTypes: [], excludedPokemon: [],
 };
 
@@ -561,8 +578,9 @@ function saveState() {
         speedBonus: parseInt(document.getElementById('speed-bonus').value),
         allowLegendaries: document.getElementById('allow-legendaries').checked,
         no4xWeakness: document.getElementById('no-4x-weakness').checked,
+        excludeEggMoves: document.getElementById('exclude-egg-moves').checked,
         mustIncludeStarter: document.getElementById('must-include-starter').checked,
-        lockedPokemon, lockedMoves, mustHaveMoves, mustHaveTypes, excludedPokemon,
+        lockedPokemon, lockedMoves, excludedMoves, mustHaveMoves, mustHaveTypes, excludedPokemon,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
@@ -598,20 +616,23 @@ function restoreState() {
 
     document.getElementById('allow-legendaries').checked = s.allowLegendaries ?? DEFAULTS.allowLegendaries;
     document.getElementById('no-4x-weakness').checked = s.no4xWeakness ?? DEFAULTS.no4xWeakness;
+    document.getElementById('exclude-egg-moves').checked = s.excludeEggMoves ?? DEFAULTS.excludeEggMoves;
     document.getElementById('must-include-starter').checked = s.mustIncludeStarter ?? DEFAULTS.mustIncludeStarter;
 
     lockedPokemon = s.lockedPokemon ?? [];
     lockedMoves = s.lockedMoves ?? [];
+    excludedMoves = s.excludedMoves ?? [];
     mustHaveMoves = s.mustHaveMoves ?? [];
     mustHaveTypes = s.mustHaveTypes ?? [];
     excludedPokemon = s.excludedPokemon ?? [];
 
     renderTags('locked-pokemon-tags', lockedPokemon, removeLockedPokemon);
     renderLockedMoves();
+    renderExcludedMoves();
     renderTags('must-have-tags', mustHaveMoves, removeMustHave);
     renderTags('must-have-type-tags', mustHaveTypes, removeMustHaveType);
     renderTags('excluded-pokemon-tags', excludedPokemon, removeExcludedPokemon);
-    refreshLockMovePokeSelect();
+    refreshConstraintPokemonSelects();
 }
 
 function resetState() {
@@ -635,20 +656,23 @@ function resetState() {
     document.getElementById('speed-bonus-value').textContent = DEFAULTS.speedBonus + '%';
     document.getElementById('allow-legendaries').checked = DEFAULTS.allowLegendaries;
     document.getElementById('no-4x-weakness').checked = DEFAULTS.no4xWeakness;
+    document.getElementById('exclude-egg-moves').checked = DEFAULTS.excludeEggMoves;
     document.getElementById('must-include-starter').checked = DEFAULTS.mustIncludeStarter;
 
     lockedPokemon = [];
     lockedMoves = [];
+    excludedMoves = [];
     mustHaveMoves = [];
     mustHaveTypes = [];
     excludedPokemon = [];
 
     renderTags('locked-pokemon-tags', lockedPokemon, removeLockedPokemon);
     renderLockedMoves();
+    renderExcludedMoves();
     renderTags('must-have-tags', mustHaveMoves, removeMustHave);
     renderTags('must-have-type-tags', mustHaveTypes, removeMustHaveType);
     renderTags('excluded-pokemon-tags', excludedPokemon, removeExcludedPokemon);
-    refreshLockMovePokeSelect();
+    refreshConstraintPokemonSelects();
 
     document.getElementById('results').style.display = 'none';
     document.getElementById('error').hidden = true;
@@ -699,7 +723,10 @@ function sanitizeSelections() {
     excludedPokemon = excludedPokemon.filter(name => validPokemon.has(name));
     lockedPokemon = lockedPokemon.filter(name => validPokemon.has(name));
     lockedMoves = lockedMoves.filter(lm =>
-        validPokemon.has(lm.pokemon) && lockedPokemon.includes(lm.pokemon)
+        validPokemon.has(lm.pokemon) && validMoves.has(lm.move)
+    );
+    excludedMoves = excludedMoves.filter(lm =>
+        validPokemon.has(lm.pokemon) && validMoves.has(lm.move)
     );
     mustHaveMoves = mustHaveMoves.filter(name => validMoves.has(name));
     mustHaveTypes = mustHaveTypes.filter(name => validTypes.has(name));
@@ -707,9 +734,10 @@ function sanitizeSelections() {
     renderTags('excluded-pokemon-tags', excludedPokemon, removeExcludedPokemon);
     renderTags('locked-pokemon-tags', lockedPokemon, removeLockedPokemon);
     renderLockedMoves();
+    renderExcludedMoves();
     renderTags('must-have-tags', mustHaveMoves, removeMustHave);
     renderTags('must-have-type-tags', mustHaveTypes, removeMustHaveType);
-    refreshLockMovePokeSelect();
+    refreshConstraintPokemonSelects();
 }
 
 async function loadDatasets() {
@@ -769,7 +797,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         handleDatasetChange();
     });
     document.getElementById('dex-select').addEventListener('change', handleDatasetChange);
-    document.getElementById('lock-move-poke').addEventListener('change', loadMovesForPoke);
+    document.getElementById('lock-move-poke').addEventListener(
+        'change',
+        () => loadMovesForPoke('lock-move-poke', 'lock-move-move')
+    );
+    document.getElementById('exclude-move-poke').addEventListener(
+        'change',
+        () => loadMovesForPoke('exclude-move-poke', 'exclude-move-move')
+    );
     document.getElementById('speed-bonus').addEventListener('input', e => {
         document.getElementById('speed-bonus-value').textContent = e.target.value + '%';
         saveState();
@@ -783,7 +818,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         document.getElementById(id).addEventListener('change', saveState);
     });
     document.getElementById('allow-legendaries').addEventListener('change', saveState);
-    document.getElementById('no-4x-weakness').addEventListener('change', saveState);
+    document.getElementById('no-4x-weakness').addEventListener('change', handleConstraintToggleChange);
+    document.getElementById('exclude-egg-moves').addEventListener('change', handleConstraintToggleChange);
     document.getElementById('must-include-starter').addEventListener('change', saveState);
     document.getElementById('add-exclude-btn').addEventListener('click', addExcludedPokemon);
     document.getElementById('exclude-poke-input').addEventListener('keydown', e => {
@@ -791,6 +827,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
     document.getElementById('add-lock-btn').addEventListener('click', addLockedPokemon);
     document.getElementById('add-lock-move-btn').addEventListener('click', addLockedMove);
+    document.getElementById('add-exclude-move-btn').addEventListener('click', addExcludedMove);
     document.getElementById('add-must-have-btn').addEventListener('click', addMustHave);
     document.getElementById('add-essential-hms-btn').addEventListener('click', addEssentialHms);
     document.getElementById('add-must-have-type-btn').addEventListener('click', addMustHaveType);
@@ -814,32 +851,47 @@ async function loadPokemonList() {
     pokemonList = await res.json();
     document.getElementById('pokemon-list').innerHTML =
         pokemonList.map(n => `<option value="${n}">`).join('');
-    refreshLockMovePokeSelect();
+    refreshConstraintPokemonSelects();
 }
 
 async function loadAllMoves() {
     const vg = currentVersionGroup();
-    const res = await fetch(`/api/all-moves?version_group=${vg}`);
+    const res = await fetch(`/api/all-moves?version_group=${vg}&exclude_egg_moves=${excludeEggMovesEnabled() ? 1 : 0}`);
     allMovesList = await res.json();
     document.getElementById('all-moves-list').innerHTML =
         allMovesList.map(n => `<option value="${n}">`).join('');
 }
 
-function refreshLockMovePokeSelect() {
-    const sel = document.getElementById('lock-move-poke');
-    sel.innerHTML = '<option value="">Pokemon\u2026</option>' +
-        lockedPokemon.map(n => `<option value="${n}">${n}</option>`).join('');
+function excludeEggMovesEnabled() {
+    return document.getElementById('exclude-egg-moves').checked;
 }
 
-async function loadMovesForPoke() {
-    const poke = document.getElementById('lock-move-poke').value;
-    const moveSel = document.getElementById('lock-move-move');
+function refreshConstraintPokemonSelects() {
+    const options = '<option value="">Pokemon\u2026</option>' +
+        pokemonList.map(n => `<option value="${n}">${n}</option>`).join('');
+    document.getElementById('lock-move-poke').innerHTML = options;
+    document.getElementById('exclude-move-poke').innerHTML = options;
+}
+
+async function loadMovesForPoke(pokeId, moveId) {
+    const poke = document.getElementById(pokeId).value;
+    const moveSel = document.getElementById(moveId);
     if (!poke) { moveSel.innerHTML = '<option value="">Move\u2026</option>'; return; }
     const vg = currentVersionGroup();
-    const res = await fetch(`/api/moves/${poke}?version_group=${vg}`);
+    const res = await fetch(`/api/moves/${poke}?version_group=${vg}&exclude_egg_moves=${excludeEggMovesEnabled() ? 1 : 0}`);
     const moves = await res.json();
     moveSel.innerHTML = '<option value="">Move\u2026</option>' +
         moves.map(m => `<option value="${m}">${m}</option>`).join('');
+}
+
+async function handleConstraintToggleChange() {
+    await loadAllMoves();
+    await Promise.all([
+        loadMovesForPoke('lock-move-poke', 'lock-move-move'),
+        loadMovesForPoke('exclude-move-poke', 'exclude-move-move'),
+    ]);
+    sanitizeSelections();
+    saveState();
 }
 
 function addExcludedPokemon() {
@@ -866,16 +918,14 @@ function addLockedPokemon() {
     lockedPokemon.push(name);
     input.value = '';
     renderTags('locked-pokemon-tags', lockedPokemon, removeLockedPokemon);
-    refreshLockMovePokeSelect();
     saveState();
 }
 
 function removeLockedPokemon(name) {
     lockedPokemon = lockedPokemon.filter(n => n !== name);
-    lockedMoves = lockedMoves.filter(lm => lm.pokemon !== name);
     renderTags('locked-pokemon-tags', lockedPokemon, removeLockedPokemon);
     renderLockedMoves();
-    refreshLockMovePokeSelect();
+    renderExcludedMoves();
     saveState();
 }
 
@@ -883,6 +933,7 @@ function addLockedMove() {
     const poke = document.getElementById('lock-move-poke').value;
     const move = document.getElementById('lock-move-move').value;
     if (!poke || !move) return;
+    if (excludedMoves.some(lm => lm.pokemon === poke && lm.move === move)) return;
     if (lockedMoves.some(lm => lm.pokemon === poke && lm.move === move)) return;
     lockedMoves.push({ pokemon: poke, move });
     renderLockedMoves();
@@ -903,6 +954,34 @@ function renderLockedMoves() {
     ).join('');
     el.querySelectorAll('.remove').forEach(btn => {
         btn.addEventListener('click', () => removeLockedMoveAt(parseInt(btn.dataset.lmIdx)));
+    });
+}
+
+function addExcludedMove() {
+    const poke = document.getElementById('exclude-move-poke').value;
+    const move = document.getElementById('exclude-move-move').value;
+    if (!poke || !move) return;
+    if (lockedMoves.some(lm => lm.pokemon === poke && lm.move === move)) return;
+    if (excludedMoves.some(lm => lm.pokemon === poke && lm.move === move)) return;
+    excludedMoves.push({ pokemon: poke, move });
+    renderExcludedMoves();
+    saveState();
+}
+
+function removeExcludedMoveAt(i) {
+    excludedMoves.splice(i, 1);
+    renderExcludedMoves();
+    saveState();
+}
+
+function renderExcludedMoves() {
+    const el = document.getElementById('excluded-moves-tags');
+    el.innerHTML = excludedMoves.map((lm, i) =>
+        `<span class="tag">${lm.pokemon}: ${lm.move}` +
+        `<span class="remove" data-em-idx="${i}">&times;</span></span>`
+    ).join('');
+    el.querySelectorAll('.remove').forEach(btn => {
+        btn.addEventListener('click', () => removeExcludedMoveAt(parseInt(btn.dataset.emIdx)));
     });
 }
 
@@ -1009,9 +1088,11 @@ async function runOptimize() {
         speed_bonus: parseInt(document.getElementById('speed-bonus').value) / 100,
         allow_legendaries: document.getElementById('allow-legendaries').checked,
         no_4x_weakness: document.getElementById('no-4x-weakness').checked,
+        exclude_egg_moves: excludeEggMovesEnabled(),
         must_include_starter: document.getElementById('must-include-starter').checked,
         locked_pokemon: lockedPokemon,
         locked_moves: lockedMoves,
+        excluded_moves: excludedMoves,
         must_have_moves: mustHaveMoves,
         must_have_types: mustHaveTypes,
         excluded_pokemon: excludedPokemon,
@@ -1023,6 +1104,10 @@ async function runOptimize() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
         });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || `Request failed with status ${res.status}`);
+        }
 
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
@@ -1198,9 +1283,11 @@ function exportCSV() {
     rows.push(['Role Strength Threshold %', p.role_threshold_pct]);
     rows.push(['Allow Legendaries', p.allow_legendaries]);
     rows.push(['Exclude 4x Weakness', p.no_4x_weakness]);
+    rows.push(['Exclude Egg Moves', p.exclude_egg_moves]);
     rows.push(['Must Include Starter', p.must_include_starter]);
     rows.push(['Locked Pokemon', esc((p.locked_pokemon || []).join('; '))]);
     rows.push(['Locked Moves', esc((p.locked_moves || []).map(lm => lm.pokemon + ':' + lm.move).join('; '))]);
+    rows.push(['Excluded Moves', esc((p.excluded_moves || []).map(lm => lm.pokemon + ':' + lm.move).join('; '))]);
     rows.push(['Must-Have Moves', esc((p.must_have_moves || []).join('; '))]);
     rows.push(['Must-Have Types', esc((p.must_have_types || []).join('; '))]);
     rows.push(['Excluded Pokemon', esc((p.excluded_pokemon || []).join('; '))]);
