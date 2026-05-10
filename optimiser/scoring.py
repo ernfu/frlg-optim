@@ -46,11 +46,11 @@ SPECIAL_TYPES = {
     "dark",
 }
 
-SELF_KO_FACTOR = 0.35
+SELF_KO_FACTOR = 0.5
 LOCK_IN_FACTOR = 0.5
 DELAYED_ATTACK_FACTOR = 0.3
-CONDITIONAL_MOVE_FACTOR = 0.2
-SELF_STAT_DROP_PENALTY_PER_STAGE = 0.1
+CONDITIONAL_MOVE_FACTOR = 0.3
+SELF_STAT_DROP_PENALTY_PER_STAGE = 0.6
 
 MOVE_SCORE_FACTORS: dict[str, float] = {
     "frustration": 0.1,
@@ -69,9 +69,13 @@ def move_penalty_factor(move: dict) -> float:
     if move.get("is_conditional"):
         factor *= CONDITIONAL_MOVE_FACTOR
     stat_changes = move.get("self_stat_changes") or []
-    total_drop = sum(abs(change) for _, change in stat_changes)
+    total_drop = sum(
+        abs(change)
+        for stat, change in stat_changes
+        if stat in {"attack", "special-attack"}
+    )
     if total_drop:
-        factor *= max(1.0 - SELF_STAT_DROP_PENALTY_PER_STAGE * total_drop, 0.1)
+        factor *= SELF_STAT_DROP_PENALTY_PER_STAGE**total_drop
     return factor
 
 
@@ -249,7 +253,7 @@ def _effective_power(move: dict, low_priority_factor: float = 0.3) -> float:
         return 0.0
     acc = move["accuracy"] if move.get("accuracy") is not None else 100
     multi_hit = move.get("multi_hit", 1.0)
-    recoil = 1.0 - move.get("recoil_pct", 0)
+    recoil = move.get("recoil_mult", 1.0)
     multi_turn = 0.3 if move.get("is_multi_turn") else 1.0
     priority = low_priority_factor if move.get("is_low_priority") else 1.0
     penalty = move_penalty_factor(move)
@@ -264,6 +268,7 @@ def _is_machine_or_tutor_move(move: dict) -> bool:
 def filter_dominated_moves(
     pokemon_pool: list[dict],
     protected_moves_by_pokemon: dict[str, set[str]] | None = None,
+    excluded_moves_by_pokemon: dict[str, set[str]] | None = None,
     low_priority_factor: float = 0.3,
 ) -> list[dict]:
     """Return a new pool with heuristic same-type pruning applied.
@@ -271,18 +276,23 @@ def filter_dominated_moves(
     For each Pokemon and attacking type, non-machine/non-tutor attacking moves
     are kept if their effective-power score is at least 80% of the best move of
     that type. TM/HM/tutor moves are preserved to keep resource semantics, and
-    protected moves (for example user-locked moves) are always kept.
+    protected moves (for example user-locked moves) are always kept, while
+    excluded moves are always removed before the heuristic compares options.
     """
     filtered: list[dict] = []
     protected_moves_by_pokemon = protected_moves_by_pokemon or {}
+    excluded_moves_by_pokemon = excluded_moves_by_pokemon or {}
     keep_threshold = 0.8
 
     for poke in pokemon_pool:
         protected_moves = set(protected_moves_by_pokemon.get(poke["name"], set()))
+        excluded_moves = set(excluded_moves_by_pokemon.get(poke["name"], set()))
         comparable_by_type: dict[str, list[dict]] = {}
         pruned_moves: set[str] = set()
 
         for move in poke["moves"]:
+            if move["name"] in excluded_moves:
+                continue
             power = move.get("power") or 0
             if power <= 0:
                 continue
@@ -310,10 +320,13 @@ def filter_dominated_moves(
                 "moves": [
                     move
                     for move in poke["moves"]
-                    if move["name"] in protected_moves
+                    if move["name"] not in excluded_moves
+                    and (
+                        move["name"] in protected_moves
                     or (move.get("power") or 0) <= 0
                     or _is_machine_or_tutor_move(move)
                     or move["name"] not in pruned_moves
+                    )
                 ],
             }
         )
@@ -379,7 +392,7 @@ def compute_scores(
             stat = attack_stat_for_move(poke, move, generation=generation)
             acc_factor = (m_acc / 100) ** acc_exponent
 
-            recoil_factor = 1.0 - move["recoil_pct"]
+            recoil_factor = move.get("recoil_mult", 1.0)
 
             is_low_pri = move["is_low_priority"]
             priority_factor = low_priority_factor if is_low_pri else 1.0
