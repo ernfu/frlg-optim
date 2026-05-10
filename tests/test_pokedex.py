@@ -232,7 +232,7 @@ def test_build_move_record_recoil_and_multi_hit(monkeypatch):
     result = pokedex._build_move_record(
         "double-edge", move_detail, raw_move, profile, generation=3
     )
-    assert result["recoil_pct"] == pytest.approx(0.33)
+    assert result["recoil_mult"] == pytest.approx(0.67)
     assert result["multi_hit"] == 1.0
     assert result["is_self_ko"] is False
     assert result["tm_only"] is False
@@ -271,6 +271,88 @@ def test_build_move_record_self_ko_flag(monkeypatch):
         "explosion", move_detail, raw_move, profile, generation=3
     )
     assert result["is_self_ko"] is True
+
+
+def test_build_move_record_conditional_flag_for_sleep_prereq(monkeypatch):
+    monkeypatch.setattr(
+        pokedex,
+        "_generation_for_version_group",
+        lambda _: 6,
+    )
+    profile = {"variable_power_estimates": {}}
+    move_detail = {
+        "name": "dream-eater",
+        "type": "psychic",
+        "power": 100,
+        "accuracy": 100,
+        "pp": 15,
+        "damage_class": "special",
+        "drain": 50,
+        "min_hits": None,
+        "max_hits": None,
+        "meta_category": "damage",
+        "stat_chance": 0,
+        "stat_changes": [],
+        "priority": 0,
+        "effect_text": (
+            "Fails if not used on a sleeping Pokemon. Inflicts regular damage."
+        ),
+        "short_effect": "Only works on sleeping Pokemon.",
+        "past_values": [],
+    }
+    raw_move = {
+        "name": "dream-eater",
+        "learn_methods": ["machine"],
+        "level_learned_at": 0,
+    }
+
+    result = pokedex._build_move_record(
+        "dream-eater", move_detail, raw_move, profile, generation=3
+    )
+
+    assert result["is_conditional"] is True
+
+
+def test_merge_pre_evolution_moves_preserves_original_learn_methods():
+    compiled_pokemon = [
+        {
+            "name": "budew",
+            "species_name": "budew",
+            "moves": [
+                {
+                    "name": "extrasensory",
+                    "learn_methods": ["egg"],
+                    "tm_only": False,
+                },
+                {
+                    "name": "mega-drain",
+                    "learn_methods": ["level-up"],
+                    "tm_only": False,
+                },
+            ],
+        },
+        {
+            "name": "roselia",
+            "species_name": "roselia",
+            "moves": [],
+        },
+        {
+            "name": "roserade",
+            "species_name": "roserade",
+            "moves": [],
+        },
+    ]
+
+    pokedex._merge_pre_evolution_moves(
+        compiled_pokemon,
+        pre_evo_map={"budew": None, "roselia": "budew", "roserade": "roselia"},
+    )
+
+    roserade = next(p for p in compiled_pokemon if p["name"] == "roserade")
+    move_methods = {move["name"]: move["learn_methods"] for move in roserade["moves"]}
+
+    assert move_methods["extrasensory"] == ["egg", "pre-evolution"]
+    assert move_methods["mega-drain"] == ["level-up", "pre-evolution"]
 
 
 # ---------------------------------------------------------------------------
@@ -628,7 +710,13 @@ def test_compile_version_group_respects_max_dex_and_fully_evolved_only(
         type("FakeTime", (), {"sleep": staticmethod(lambda _: None)}),
     )
 
-    ids = {"piplup": 393, "prinplup": 394, "empoleon": 395, "victini": 494}
+    ids = {
+        "piplup": 393,
+        "prinplup": 394,
+        "empoleon": 395,
+        "victini": 494,
+        "jirachi": 385,
+    }
 
     monkeypatch.setattr(
         pokedex,
@@ -663,6 +751,7 @@ def test_compile_version_group_respects_max_dex_and_fully_evolved_only(
         "prinplup": "piplup",
         "empoleon": "prinplup",
         "victini": None,
+        "jirachi": None,
     }
     monkeypatch.setattr(
         pokedex,

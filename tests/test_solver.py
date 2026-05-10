@@ -13,7 +13,7 @@ def _move(name: str, move_type: str, *, tm_only: bool = False) -> dict:
         "level_learned_at": 1,
         "tm_only": tm_only,
         "is_multi_turn": False,
-        "recoil_pct": 0,
+        "recoil_mult": 1.0,
         "is_low_priority": False,
         "multi_hit": 1.0,
         "is_lock_in": False,
@@ -368,3 +368,72 @@ def test_solve_model_respects_max_same_type_moves():
 
         counts = Counter(move_type_lookup[mn] for mn in entry["moves"])
         assert all(c <= 1 for c in counts.values())
+
+
+def test_solve_model_excludes_move_for_locked_pokemon():
+    pokemon_pool = []
+    scores = {}
+
+    for idx in range(6):
+        name = f"poke-{idx}"
+        moves = [
+            _move(f"{name}-fire1", "fire"),
+            _move(f"{name}-fire2", "fire"),
+            _move(f"{name}-water", "water"),
+            _move(f"{name}-grass", "grass"),
+            _move(f"{name}-normal", "normal"),
+        ]
+        for move_idx, move in enumerate(moves, start=1):
+            for def_type in ["normal", "fire", "water", "grass"]:
+                scores[name, move["name"], def_type] = float(100 + move_idx)
+        pokemon_pool.append(_pokemon(name, moves))
+
+    params = Params(
+        max_overlap=6,
+        min_redundancy=0,
+        max_same_type_moves=4,
+        min_role_types=0,
+        locked_pokemon={"poke-0": []},
+        excluded_moves_by_pokemon={"poke-0": ["poke-0-fire2"]},
+    )
+
+    model = build_model(pokemon_pool, scores, params)
+    status, team, _, _ = solve_model(model)
+
+    assert status == "Optimal"
+    poke0 = next(entry for entry in team if entry["name"] == "poke-0")
+    assert "poke-0-fire2" not in poke0["moves"]
+
+
+def test_solve_model_locked_move_does_not_force_pokemon_selection():
+    pokemon_pool = []
+    scores = {}
+
+    for idx in range(7):
+        name = f"poke-{idx}"
+        moves = [
+            _move(f"{name}-fire1", "fire"),
+            _move(f"{name}-fire2", "fire"),
+            _move(f"{name}-water", "water"),
+            _move(f"{name}-grass", "grass"),
+            _move(f"{name}-normal", "normal"),
+        ]
+        for move in moves:
+            base_score = 1000.0 if idx < 6 else 1.0
+            for def_type in ["normal", "fire", "water", "grass"]:
+                scores[name, move["name"], def_type] = base_score
+        pokemon_pool.append(_pokemon(name, moves))
+
+    params = Params(
+        max_overlap=6,
+        min_redundancy=0,
+        max_same_type_moves=4,
+        min_role_types=0,
+        locked_moves_by_pokemon={"poke-6": ["poke-6-fire1"]},
+    )
+
+    model = build_model(pokemon_pool, scores, params)
+    status, team, _, _ = solve_model(model)
+
+    assert status == "Optimal"
+    assert all(entry["name"] != "poke-6" for entry in team)

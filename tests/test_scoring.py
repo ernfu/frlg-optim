@@ -23,7 +23,7 @@ def _move(name: str, move_type: str, power: int = 100, **overrides) -> dict:
         "level_learned_at": 1,
         "tm_only": False,
         "is_multi_turn": False,
-        "recoil_pct": 0,
+        "recoil_mult": 1.0,
         "is_low_priority": False,
         "multi_hit": 1.0,
         "is_lock_in": False,
@@ -89,12 +89,17 @@ def test_generation_8_supports_fairy_type_chart():
 
 def test_move_penalty_factor_self_ko():
     move = _move("explosion", "normal", is_self_ko=True)
-    assert move_penalty_factor(move) == 0.35
+    assert move_penalty_factor(move) == 0.5
 
 
 def test_move_penalty_factor_lock_in():
     move = _move("outrage", "dragon", is_lock_in=True)
-    assert move_penalty_factor(move) == 0.8
+    assert move_penalty_factor(move) == 0.5
+
+
+def test_move_penalty_factor_conditional():
+    move = _move("dream-eater", "psychic", is_conditional=True)
+    assert move_penalty_factor(move) == 0.3
 
 
 def test_move_penalty_factor_self_stat_drop():
@@ -103,7 +108,16 @@ def test_move_penalty_factor_self_stat_drop():
         "fire",
         self_stat_changes=[("special-attack", -2)],
     )
-    assert move_penalty_factor(move) == 0.8
+    assert move_penalty_factor(move) == pytest.approx(0.36)
+
+
+def test_move_penalty_factor_ignores_non_offensive_self_stat_drop():
+    move = _move(
+        "close-combat",
+        "fighting",
+        self_stat_changes=[("defense", -1), ("special-defense", -1)],
+    )
+    assert move_penalty_factor(move) == 1.0
 
 
 def test_move_penalty_factor_plain_move():
@@ -130,6 +144,22 @@ def test_self_ko_discounts_score():
     )
 
 
+def test_recoil_mult_is_used_as_direct_multiplier():
+    pool = [
+        {
+            "name": "recoiler",
+            "types": ["normal"],
+            "base_stats": {"attack": 100, "special-attack": 100, "speed": 100},
+            "moves": [
+                _move("double-edge", "normal", recoil_mult=0.67),
+                _move("body-slam", "normal"),
+            ],
+        }
+    ]
+    scores = compute_scores(pool, speed_bonus=0.0)
+    assert scores["recoiler", "double-edge", "normal"] == pytest.approx(
+        scores["recoiler", "body-slam", "normal"] * 0.67
+    )
 # ---------------------------------------------------------------------------
 # Type chart: immunities
 # ---------------------------------------------------------------------------
@@ -339,6 +369,28 @@ def test_filter_dominated_moves_keeps_protected_moves():
     )
     move_names = {m["name"] for m in filtered[0]["moves"]}
     assert "tackle" in move_names
+
+
+def test_filter_dominated_moves_drops_excluded_moves_before_pruning():
+    pool = [
+        {
+            "name": "attacker",
+            "types": ["fire"],
+            "base_stats": {"attack": 100, "special-attack": 100, "speed": 100},
+            "moves": [
+                _move("ember", "fire", power=40),
+                _move("flamethrower", "fire", power=90),
+                _move("fire-blast", "fire", power=110),
+            ],
+        }
+    ]
+    filtered = filter_dominated_moves(
+        pool, excluded_moves_by_pokemon={"attacker": {"fire-blast"}}
+    )
+    move_names = {m["name"] for m in filtered[0]["moves"]}
+    assert "fire-blast" not in move_names
+    assert "flamethrower" in move_names
+    assert "ember" not in move_names
 
 
 def test_filter_dominated_moves_keeps_different_types():

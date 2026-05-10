@@ -3,6 +3,7 @@ import json
 from optimiser.main import (
     dataset_generation,
     dataset_unlimited_tms,
+    filter_moves_by_learn_method,
     load_dataset,
     load_pokemon,
 )
@@ -125,3 +126,25 @@ def test_load_pokemon_4x_weakness_uses_generation(tmp_path):
     pool = load_pokemon(data_path, no_legendaries=False, no_4x_weakness=True)
     assert all(p["name"] != "articuno" for p in pool)
     assert any(p["name"] == "haxorus" for p in pool)
+
+
+def test_filter_moves_by_learn_method_removes_egg_moves():
+    pool = [
+        {
+            "name": "pikachu",
+            "moves": [
+                {"name": "thunderbolt", "learn_methods": ["machine"]},
+                {"name": "volt-tackle", "learn_methods": ["egg"]},
+                {"name": "surf", "learn_methods": ["event", "machine"]},
+            ],
+        }
+    ]
+
+    filtered = filter_moves_by_learn_method(pool, {"egg"})
+
+    assert [move["name"] for move in filtered[0]["moves"]] == ["thunderbolt", "surf"]
+    assert [move["name"] for move in pool[0]["moves"]] == [
+        "thunderbolt",
+        "volt-tackle",
+        "surf",
+    ]
