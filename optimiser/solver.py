@@ -28,6 +28,8 @@ class Params:
     role_threshold_pct: float = 80.0
     no_legendaries: bool = True
     locked_pokemon: dict[str, list[str]] = field(default_factory=dict)
+    locked_moves_by_pokemon: dict[str, list[str]] = field(default_factory=dict)
+    excluded_moves_by_pokemon: dict[str, list[str]] = field(default_factory=dict)
     must_have_moves: list[str] = field(default_factory=list)
     must_have_types: list[str] = field(default_factory=list)
     must_include_any_of_pokemon: list[str] = field(default_factory=list)
@@ -345,12 +347,25 @@ def build_model(pokemon_pool, scores, params, generation: int = 3):
     _add_tm_constraints(prob, y, single_use_tm_users)
 
     # -- user constraints --
-    for locked_name, locked_moves in params.locked_pokemon.items():
+    for locked_name in params.locked_pokemon:
         if locked_name in x:
             prob += x[locked_name] == 1, f"lock_poke_{locked_name}"
-            for lm in locked_moves:
-                if (locked_name, lm) in y:
-                    prob += y[locked_name, lm] == 1, f"lock_move_{locked_name}_{lm}"
+
+    for locked_name, locked_moves in params.locked_moves_by_pokemon.items():
+        if locked_name not in x:
+            continue
+        for lm in locked_moves:
+            if (locked_name, lm) in y:
+                prob += y[locked_name, lm] == x[locked_name], (
+                    f"lock_move_{locked_name}_{lm}"
+                )
+
+    for locked_name, excluded_moves in params.excluded_moves_by_pokemon.items():
+        for move_name in excluded_moves:
+            if (locked_name, move_name) in y:
+                prob += y[locked_name, move_name] == 0, (
+                    f"exclude_move_{locked_name}_{move_name}"
+                )
 
     for must_move in params.must_have_moves:
         carriers = [
@@ -544,6 +559,10 @@ def _diagnose_infeasibility(
         suggestions.append(
             "Remove some entries from 'Team Constraints > Lock Pokemon' or "
             "'Team Constraints > Lock Moves'"
+        )
+    if params.excluded_moves_by_pokemon:
+        suggestions.append(
+            "Remove some entries from 'Team Constraints > Exclude Moves'"
         )
     if params.must_have_moves:
         suggestions.append(
